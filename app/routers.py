@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AfterValidator
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -29,8 +30,8 @@ def _strip_nonblank(value: str | None) -> str | None:
 
 @router.post("/documents", response_model=DocumentRead, status_code=201)
 def create_document(payload: DocumentCreate, db: Session = Depends(get_db)) -> Document:
-    # Reject exact duplicates (same title + content) with 409 rather than silently
-    # storing a second identical row. Values are already whitespace-stripped.
+    # Fast path: reject an already-stored duplicate before paying for an embedding.
+    # Values are already whitespace-stripped by the schema.
     duplicate = db.scalar(
         select(Document).where(
             Document.title == payload.title, Document.content == payload.content
@@ -46,7 +47,14 @@ def create_document(payload: DocumentCreate, db: Session = Depends(get_db)) -> D
         embedding=embed(f"{payload.title}. {payload.content}"),
     )
     db.add(document)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # The pre-check above races: a concurrent POST may insert the same
+        # (title, content) between our SELECT and COMMIT. The unique constraint
+        # is the authoritative guard — the loser rolls back and gets a 409.
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Document already exists")
     db.refresh(document)
     return document
 

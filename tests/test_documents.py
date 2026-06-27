@@ -1,6 +1,13 @@
 """Behavioural tests. These use the real all-MiniLM-L6-v2 model (downloaded once
 and cached) so the semantic ranking is genuinely exercised, not mocked."""
 
+from datetime import datetime, timezone
+
+import pytest
+from sqlalchemy.exc import IntegrityError
+
+from app.models import Document
+
 SAMPLE_DOCS = [
     {
         "title": "RCS Thruster Firing Procedure",
@@ -136,3 +143,27 @@ def test_duplicate_document_returns_409(client):
         "content": SAMPLE_DOCS[0]["content"],
     }
     assert client.post("/documents", json=padded).status_code == 409
+
+
+def test_created_at_is_timezone_aware_utc(client):
+    # Regression: a naive timestamp (no offset) round-tripped through SQLite would
+    # leave clients unable to tell the time is UTC. It must be aware UTC.
+    body = client.post("/documents", json=SAMPLE_DOCS[0]).json()
+    raw = body["created_at"]
+    # ISO-8601 UTC is emitted as a trailing "Z" or "+00:00"; both are acceptable,
+    # what matters is that an offset is present (not a naive timestamp).
+    assert raw.endswith("Z") or raw.endswith("+00:00"), raw
+    parsed = datetime.fromisoformat(raw)
+    assert parsed.tzinfo is not None
+    assert parsed.utcoffset() == timezone.utc.utcoffset(None)
+
+
+def test_duplicate_blocked_by_db_constraint(db_session):
+    # Regression: the router's SELECT pre-check races under concurrency, so the
+    # DB unique constraint is the real guard. Verify it actually fires when two
+    # identical rows are committed (simulating the lost race).
+    db_session.add(Document(title="t", content="c", embedding=[0.1, 0.2]))
+    db_session.add(Document(title="t", content="c", embedding=[0.1, 0.2]))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()

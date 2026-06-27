@@ -65,6 +65,12 @@ filter, duplicate (409), delete/404, and input validation.
   matrix-vector dot product (fast, no divide-by-zero).
 - The model is loaded once via FastAPI's `lifespan` (singleton); sync endpoints run in
   FastAPI's thread pool and inference is read-only, so sharing the model is safe.
+- **Dedup** is enforced by a `UNIQUE(title, content)` constraint; the router's
+  pre-`SELECT` is only a fast path that avoids embedding an obvious duplicate. Under
+  concurrent POSTs the pre-check races, so the constraint is the real guard — the
+  loser catches `IntegrityError` and returns 409.
+- **`created_at`** is stored and returned as timezone-aware UTC. SQLite drops tz info,
+  so a `UTCDateTime` decorator re-attaches UTC on read (the API emits a trailing `Z`).
 
 ## Assumptions
 

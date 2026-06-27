@@ -15,6 +15,24 @@ from app.main import app
 
 
 @pytest.fixture
+def db_session():
+    """A session on a fresh in-memory DB for testing ORM/DB-level behaviour
+    (e.g. the unique constraint) directly, without going through HTTP."""
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@pytest.fixture
 def client():
     # StaticPool keeps a single connection, so the in-memory DB is shared across
     # the request threads. Without it the schema would be invisible to requests.

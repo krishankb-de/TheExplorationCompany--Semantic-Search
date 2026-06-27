@@ -41,7 +41,7 @@ curl "http://127.0.0.1:8000/documents/search?q=propulsion&filter_title=thruster"
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `POST` | `/documents` | Store a document; returns it with `id` and `created_at` (201). |
+| `POST` | `/documents` | Store a document; returns it with `id` and `created_at` (201). 409 if an identical `title`+`content` already exists. |
 | `GET` | `/documents/search?q=&top_k=5&filter_title=` | Rank stored docs by cosine similarity (200). |
 | `DELETE` | `/documents/{id}` | Delete by id (204), or 404 if missing. |
 
@@ -51,9 +51,9 @@ curl "http://127.0.0.1:8000/documents/search?q=propulsion&filter_title=thruster"
 pytest
 ```
 
-Tests use the **real** model so semantic ranking is actually verified (a related
-doc must outrank unrelated ones), plus `top_k`, the `filter_title` bonus, delete/404,
-and input validation.
+Tests use the **real** model so semantic ranking is actually verified — each
+query's *top* hit must be the correct doc — plus `top_k`, the `filter_title`
+filter, duplicate (409), delete/404, and input validation.
 
 ## Design notes
 
@@ -69,5 +69,8 @@ and input validation.
 ## Assumptions
 
 - The embedding is computed over `title + content` (titles carry strong keywords).
-- `top_k` defaults to 5, bounded to `[1, 100]`; empty `q`/`title`/`content` → 422.
+- `top_k` defaults to 5, bounded to `[1, 100]`.
+- `q`/`title`/`content`/`filter_title` are whitespace-stripped; empty or
+  whitespace-only → 422.
+- Reposting an identical `title`+`content` returns 409 (no duplicate rows).
 - `created_at` is timezone-aware UTC.

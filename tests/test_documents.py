@@ -97,3 +97,42 @@ def test_invalid_inputs_return_422(client):
     assert (
         client.post("/documents", json={"title": "", "content": ""}).status_code == 422
     )
+
+
+def test_rank_one_correctness(client):
+    """Stronger than the relative-order test: each query's *top* hit must be the
+    semantically correct doc, across all five topics."""
+    seed(client)
+    expectations = {
+        "deploying the solar arrays": "Solar Panel Deployment Sequence",
+        "pressurise the fuel tank": "Propellant Tank Pressurisation Procedure",
+        "radio antenna signal strength": "Communication Link Budget",
+        "temperature regulation": "Thermal Control System Overview",
+        "how do I fire the thrusters": "RCS Thruster Firing Procedure",
+    }
+    for query, expected in expectations.items():
+        results = client.get("/documents/search", params={"q": query}).json()
+        assert results[0]["title"] == expected, (query, results[0]["title"])
+
+
+def test_blank_inputs_return_422(client):
+    # whitespace-only is no longer silently accepted (stripped -> empty -> 422)
+    assert client.post("/documents", json={"title": "   ", "content": "x"}).status_code == 422
+    assert client.post("/documents", json={"title": "x", "content": "   "}).status_code == 422
+    assert client.get("/documents/search", params={"q": "   "}).status_code == 422
+    assert (
+        client.get("/documents/search", params={"q": "x", "filter_title": "   "}).status_code
+        == 422
+    )
+
+
+def test_duplicate_document_returns_409(client):
+    assert client.post("/documents", json=SAMPLE_DOCS[0]).status_code == 201
+    # exact duplicate
+    assert client.post("/documents", json=SAMPLE_DOCS[0]).status_code == 409
+    # surrounding whitespace is stripped first, so this is also a duplicate
+    padded = {
+        "title": f"  {SAMPLE_DOCS[0]['title']}  ",
+        "content": SAMPLE_DOCS[0]["content"],
+    }
+    assert client.post("/documents", json=padded).status_code == 409

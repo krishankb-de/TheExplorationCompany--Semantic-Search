@@ -1,4 +1,7 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import AfterValidator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -10,8 +13,32 @@ from app.schemas import DocumentCreate, DocumentRead, DocumentSearchResult
 router = APIRouter()
 
 
+def _strip_nonblank(value: str | None) -> str | None:
+    """Strip a query-string value and reject it (422) if it is blank.
+
+    Used for `q`/`filter_title`: FastAPI honours `min_length` on query params but
+    does not strip first, so a whitespace-only value would otherwise slip through.
+    """
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        raise ValueError("must not be blank or whitespace-only")
+    return value
+
+
 @router.post("/documents", response_model=DocumentRead, status_code=201)
 def create_document(payload: DocumentCreate, db: Session = Depends(get_db)) -> Document:
+    # Reject exact duplicates (same title + content) with 409 rather than silently
+    # storing a second identical row. Values are already whitespace-stripped.
+    duplicate = db.scalar(
+        select(Document).where(
+            Document.title == payload.title, Document.content == payload.content
+        )
+    )
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail="Document already exists")
+
     document = Document(
         title=payload.title,
         content=payload.content,
@@ -26,9 +53,15 @@ def create_document(payload: DocumentCreate, db: Session = Depends(get_db)) -> D
 
 @router.get("/documents/search", response_model=list[DocumentSearchResult])
 def search_documents(
-    q: str = Query(..., min_length=1, description="Natural language search query"),
-    top_k: int = Query(5, ge=1, le=100),
-    filter_title: str | None = Query(None, min_length=1),
+    q: Annotated[
+        str,
+        Query(min_length=1, description="Natural language search query"),
+        AfterValidator(_strip_nonblank),
+    ],
+    top_k: Annotated[int, Query(ge=1, le=100)] = 5,
+    filter_title: Annotated[
+        str | None, Query(min_length=1), AfterValidator(_strip_nonblank)
+    ] = None,
     db: Session = Depends(get_db),
 ) -> list[DocumentSearchResult]:
     statement = select(Document)
